@@ -559,41 +559,26 @@ async function doDelGasto(id){
   setSyncState('ok'); render();
 }
 
-/* gasto rápido */
-document.getElementById('gQuickAdd').onclick=async()=>{
-  const descricao=document.getElementById('gQuick').value.trim();
-  const valor=parseFloat(document.getElementById('gQuickVal').value);
-  const pessoa=document.getElementById('gQuickWho').value;
-  if(!descricao||!valor){alert('Preencha a descrição e o valor.');return;}
-  const today=new Date();
-  const data=(monthKey(today)===curMK())?today.toISOString().slice(0,10):curMK()+'-01';
-  const g={id:uid(),descricao,valor,pessoa,data};
-  setSyncState('syncing');
-  await DB_api.addGasto(g);
-  DB.gastos.unshift(g);
-  document.getElementById('gQuick').value='';
-  document.getElementById('gQuickVal').value='';
-  setSyncState('ok'); render();
-};
+/* gasto rápido — handler registrado no DOMContentLoaded abaixo */
 
 /* ============================================================
    MODAIS
    ============================================================ */
-const modalBg=document.getElementById('modalBg'),modalContent=document.getElementById('modalContent');
-function closeModal(){modalBg.classList.remove('show');}
-modalBg.addEventListener('click',e=>{if(e.target===modalBg)closeModal();});
+function getModalBg(){return document.getElementById('modalBg');}
+function getModalContent(){return document.getElementById('modalContent');}
+function closeModal(){getModalBg().classList.remove('show');}
 
 function openAddMenu(){
   const cur=currentView();
   if(cur==='entradas')return formEntrada();
   if(cur==='despesas')return formDespesa();
   if(cur==='gastos'){document.getElementById('gQuick').focus();return;}
-  modalContent.innerHTML=`
+  getModalContent().innerHTML=`
     <h3>O que adicionar? <button class="x" onclick="closeModal()">✕</button></h3>
     <button class="btn primary" style="margin-bottom:10px" onclick="formEntrada()">💰 Entrada (salário / recebimento)</button>
     <button class="btn primary" style="margin-bottom:10px;background:var(--amber)" onclick="formDespesa()">📋 Despesa / conta</button>
     <button class="btn ghost" onclick="go('gastos');closeModal()">🛒 Gasto do dia a dia</button>`;
-  modalBg.classList.add('show');
+  getModalBg().classList.add('show');
 }
 
 function peopleOptions(sel){
@@ -603,7 +588,7 @@ function peopleOptions(sel){
 }
 
 function formEntrada(){
-  modalContent.innerHTML=`
+  getModalContent().innerHTML=`
     <h3>Nova entrada <button class="x" onclick="closeModal()">✕</button></h3>
     <div class="field"><label>De quem é?</label><select id="f_pessoa">${peopleOptions('p1')}</select></div>
     <div class="field"><label>Descrição</label><input id="f_desc" placeholder="Ex: Salário, freela..."></div>
@@ -616,7 +601,7 @@ function formEntrada(){
       <label class="switch"><input type="checkbox" id="f_rec" checked><span></span></label>
     </div>
     <button class="btn primary" style="margin-top:10px" onclick="saveEntrada()">Salvar entrada</button>`;
-  modalBg.classList.add('show');
+  getModalBg().classList.add('show');
 }
 async function saveEntrada(){
   const descricao=v('f_desc').trim(),valor=parseFloat(v('f_val')),dia=parseInt(v('f_dia'))||1;
@@ -630,7 +615,7 @@ async function saveEntrada(){
 }
 
 function formDespesa(){
-  modalContent.innerHTML=`
+  getModalContent().innerHTML=`
     <h3>Nova despesa <button class="x" onclick="closeModal()">✕</button></h3>
     <div class="seg" style="margin-bottom:11px">
       <label><input type="radio" name="f_tipo" value="fixa" checked><span>🏠 Fixa</span></label>
@@ -653,7 +638,7 @@ function formDespesa(){
       <div class="field"><label>Total de parcelas</label><input id="f_pTotal" type="number" min="1" placeholder="12"></div>
     </div>
     <button class="btn primary" onclick="saveDespesa()">Salvar despesa</button>`;
-  modalBg.classList.add('show');
+  getModalBg().classList.add('show');
 }
 function showParcRow(){document.getElementById('parcRowModal').classList.toggle('hidden',v('f_modo')!=='parcelada');}
 async function saveDespesa(){
@@ -677,11 +662,7 @@ async function saveDespesa(){
 /* ============================================================
    CALCULADORA
    ============================================================ */
-document.getElementById('calcTabs').addEventListener('click',e=>{
-  if(e.target.tagName!=='BUTTON')return;
-  document.querySelectorAll('#calcTabs button').forEach(b=>b.classList.remove('active'));
-  e.target.classList.add('active'); calcMode=e.target.dataset.c; renderCalc();
-});
+/* calcTabs — handler registrado no DOMContentLoaded abaixo */
 function renderCalc(){
   const box=document.getElementById('calcBody');
   if(calcMode==='divisao'){
@@ -751,10 +732,6 @@ function go(view){
   if(view==='calc')renderCalc();
   window.scrollTo(0,0);
 }
-document.querySelector('nav').addEventListener('click',e=>{const b=e.target.closest('button');if(b)go(b.dataset.v);});
-document.getElementById('fab').onclick=openAddMenu;
-document.getElementById('prevMonth').onclick=()=>{viewMonth.setMonth(viewMonth.getMonth()-1);render();};
-document.getElementById('nextMonth').onclick=()=>{viewMonth.setMonth(viewMonth.getMonth()+1);render();};
 
 /* ============================================================
    AJUSTES
@@ -787,38 +764,67 @@ async function saveConfig(){
 }
 function updateReservaMsg(){
   const t=totals(),alvo3=t.totalOut*3,msg=document.getElementById('reservaMsg');
+  if(!msg)return;
   if(t.totalOut<=0){msg.textContent='Cadastre despesas para calcular o tamanho ideal da reserva.';return;}
-  const res=+v('setReserva')||DB.config.reserva||0;
-  if(res>=alvo3)msg.innerHTML=`✅ Reserva para mais de 3 meses (${BRL(res)}). Excelente!`;
-  else msg.innerHTML=`Meta de 3 meses: <b>${BRL(alvo3)}</b>. Faltam <b>${BRL(alvo3-res)}</b>.`;
+  const reserva=+v('setReserva')||DB.config.reserva||0;
+  if(reserva>=alvo3)msg.innerHTML=`✅ Reserva para mais de 3 meses (${BRL(reserva)}). Excelente!`;
+  else msg.innerHTML=`Meta de 3 meses: <b>${BRL(alvo3)}</b>. Faltam <b>${BRL(alvo3-reserva)}</b>.`;
 }
-document.getElementById('btnSaveNames').onclick=saveConfig;
-document.getElementById('btnSaveConfig').onclick=saveConfig;
-document.getElementById('btnSaveReserva').onclick=saveConfig;
-
 function refreshPeopleSelects(){
   const sel=document.getElementById('gQuickWho');
+  if(!sel)return;
   const cur=sel.value||'p1';
   sel.innerHTML=peopleOptions(cur);
 }
 
 /* ============================================================
-   START
+   START — tudo dentro do DOMContentLoaded para garantir que
+   a página esteja 100% carregada antes de buscar elementos
    ============================================================ */
-(async()=>{
-  const ok=await loadAll();
-  document.getElementById('loadingScreen').style.display='none';
-  bindSettings();
-  render();
-  if(!ok){
-    setTimeout(()=>alert('⚠️ Não foi possível conectar ao banco de dados. Verifique sua internet e recarregue a página.'),500);
-  }
-  // sincroniza a cada 30 segundos para pegar mudanças do outro celular
-  setInterval(async()=>{
-    await loadAll();
+document.addEventListener('DOMContentLoaded', ()=>{
+
+  /* eventos de navegação */
+  document.querySelector('nav').addEventListener('click',e=>{const b=e.target.closest('button');if(b)go(b.dataset.v);});
+  document.getElementById('fab').onclick=openAddMenu;
+  document.getElementById('prevMonth').onclick=()=>{viewMonth.setMonth(viewMonth.getMonth()-1);render();};
+  document.getElementById('nextMonth').onclick=()=>{viewMonth.setMonth(viewMonth.getMonth()+1);render();};
+  document.getElementById('gQuickAdd').onclick=async()=>{
+    const descricao=document.getElementById('gQuick').value.trim();
+    const valor=parseFloat(document.getElementById('gQuickVal').value);
+    const pessoa=document.getElementById('gQuickWho').value;
+    if(!descricao||!valor){alert('Preencha a descrição e o valor.');return;}
+    const today=new Date();
+    const data=(monthKey(today)===curMK())?today.toISOString().slice(0,10):curMK()+'-01';
+    const g={id:uid(),descricao,valor,pessoa,data};
+    setSyncState('syncing');
+    await DB_api.addGasto(g);
+    DB.gastos.unshift(g);
+    document.getElementById('gQuick').value='';
+    document.getElementById('gQuickVal').value='';
+    setSyncState('ok'); render();
+  };
+  document.getElementById('calcTabs').addEventListener('click',e=>{
+    if(e.target.tagName!=='BUTTON')return;
+    document.querySelectorAll('#calcTabs button').forEach(b=>b.classList.remove('active'));
+    e.target.classList.add('active'); calcMode=e.target.dataset.c; renderCalc();
+  });
+  document.getElementById('modalBg').addEventListener('click',e=>{if(e.target===document.getElementById('modalBg'))closeModal();});
+  document.getElementById('btnSaveNames').onclick=saveConfig;
+  document.getElementById('btnSaveConfig').onclick=saveConfig;
+  document.getElementById('btnSaveReserva').onclick=saveConfig;
+
+  /* carrega dados e inicia */
+  (async()=>{
+    const ok=await loadAll();
+    document.getElementById('loadingScreen').style.display='none';
+    bindSettings();
     render();
-  }, 30000);
-})();
+    if(!ok){
+      setTimeout(()=>alert('⚠️ Não foi possível conectar ao banco de dados. Verifique sua internet e recarregue a página.'),500);
+    }
+    setInterval(async()=>{ await loadAll(); render(); }, 30000);
+  })();
+});
 </script>
 </body>
 </html>
