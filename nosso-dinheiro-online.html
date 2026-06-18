@@ -333,6 +333,7 @@ function setSyncState(state){
 
 async function loadAll(){
   setSyncState('syncing');
+  const sc=document.getElementById('statusConexao');
   try {
     const [cfg, ent, desp, gas] = await Promise.all([
       DB_api.getConfig(),
@@ -345,15 +346,12 @@ async function loadAll(){
     DB.despesas = desp;
     DB.gastos = gas;
     setSyncState('ok');
-    document.getElementById('statusConexao').innerHTML =
-      '<span class="ai">✅</span><span>Conectado ao banco de dados. Dados salvos na nuvem.</span>';
-    document.getElementById('statusConexao').className = 'alert green';
+    if(sc){ sc.innerHTML='<span class="ai">✅</span><span>Conectado ao banco de dados. Dados salvos na nuvem.</span>'; sc.className='alert green'; }
     return true;
   } catch(e) {
     setSyncState('error');
-    document.getElementById('statusConexao').innerHTML =
-      '<span class="ai">❌</span><span>Erro de conexão: '+e.message+'</span>';
-    document.getElementById('statusConexao').className = 'alert red';
+    if(sc){ sc.innerHTML='<span class="ai">❌</span><span>Erro de conexão: '+e.message+'</span>'; sc.className='alert red'; }
+    console.error('Erro ao carregar dados do Supabase:', e);
     return false;
   }
 }
@@ -781,14 +779,16 @@ function refreshPeopleSelects(){
    START — tudo dentro do DOMContentLoaded para garantir que
    a página esteja 100% carregada antes de buscar elementos
    ============================================================ */
-document.addEventListener('DOMContentLoaded', ()=>{
+function iniciarApp(){
 
-  /* eventos de navegação */
-  document.querySelector('nav').addEventListener('click',e=>{const b=e.target.closest('button');if(b)go(b.dataset.v);});
-  document.getElementById('fab').onclick=openAddMenu;
-  document.getElementById('prevMonth').onclick=()=>{viewMonth.setMonth(viewMonth.getMonth()-1);render();};
-  document.getElementById('nextMonth').onclick=()=>{viewMonth.setMonth(viewMonth.getMonth()+1);render();};
-  document.getElementById('gQuickAdd').onclick=async()=>{
+  /* eventos de navegação — cada um protegido contra elemento ausente */
+  const nav=document.querySelector('nav');
+  if(nav) nav.addEventListener('click',e=>{const b=e.target.closest('button');if(b)go(b.dataset.v);});
+  const fab=document.getElementById('fab'); if(fab) fab.onclick=openAddMenu;
+  const pm=document.getElementById('prevMonth'); if(pm) pm.onclick=()=>{viewMonth.setMonth(viewMonth.getMonth()-1);render();};
+  const nm=document.getElementById('nextMonth'); if(nm) nm.onclick=()=>{viewMonth.setMonth(viewMonth.getMonth()+1);render();};
+  const gqa=document.getElementById('gQuickAdd');
+  if(gqa) gqa.onclick=async()=>{
     const descricao=document.getElementById('gQuick').value.trim();
     const valor=parseFloat(document.getElementById('gQuickVal').value);
     const pessoa=document.getElementById('gQuickWho').value;
@@ -797,34 +797,42 @@ document.addEventListener('DOMContentLoaded', ()=>{
     const data=(monthKey(today)===curMK())?today.toISOString().slice(0,10):curMK()+'-01';
     const g={id:uid(),descricao,valor,pessoa,data};
     setSyncState('syncing');
-    await DB_api.addGasto(g);
-    DB.gastos.unshift(g);
+    try{ await DB_api.addGasto(g); DB.gastos.unshift(g); setSyncState('ok'); }catch(e){ setSyncState('error'); alert('Erro ao salvar: '+e.message); }
     document.getElementById('gQuick').value='';
     document.getElementById('gQuickVal').value='';
-    setSyncState('ok'); render();
+    render();
   };
-  document.getElementById('calcTabs').addEventListener('click',e=>{
+  const ct=document.getElementById('calcTabs');
+  if(ct) ct.addEventListener('click',e=>{
     if(e.target.tagName!=='BUTTON')return;
     document.querySelectorAll('#calcTabs button').forEach(b=>b.classList.remove('active'));
     e.target.classList.add('active'); calcMode=e.target.dataset.c; renderCalc();
   });
-  document.getElementById('modalBg').addEventListener('click',e=>{if(e.target===document.getElementById('modalBg'))closeModal();});
-  document.getElementById('btnSaveNames').onclick=saveConfig;
-  document.getElementById('btnSaveConfig').onclick=saveConfig;
-  document.getElementById('btnSaveReserva').onclick=saveConfig;
+  const mb=document.getElementById('modalBg');
+  if(mb) mb.addEventListener('click',e=>{if(e.target===mb)closeModal();});
+  const b1=document.getElementById('btnSaveNames'); if(b1) b1.onclick=saveConfig;
+  const b2=document.getElementById('btnSaveConfig'); if(b2) b2.onclick=saveConfig;
+  const b3=document.getElementById('btnSaveReserva'); if(b3) b3.onclick=saveConfig;
 
   /* carrega dados e inicia */
   (async()=>{
     const ok=await loadAll();
-    document.getElementById('loadingScreen').style.display='none';
+    const ls=document.getElementById('loadingScreen'); if(ls) ls.style.display='none';
     bindSettings();
     render();
     if(!ok){
-      setTimeout(()=>alert('⚠️ Não foi possível conectar ao banco de dados. Verifique sua internet e recarregue a página.'),500);
+      setTimeout(()=>alert('⚠️ Não foi possível conectar ao banco de dados. Abra o Console (F12) e veja a mensagem em vermelho, ou verifique sua internet.'),500);
     }
-    setInterval(async()=>{ await loadAll(); render(); }, 30000);
+    setInterval(async()=>{ try{ await loadAll(); render(); }catch(e){} }, 30000);
   })();
-});
+}
+
+/* roda já se a página estiver pronta, ou espera carregar */
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded', iniciarApp);
+}else{
+  iniciarApp();
+}
 </script>
 </body>
 </html>
