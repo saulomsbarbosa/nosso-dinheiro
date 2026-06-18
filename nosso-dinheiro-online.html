@@ -147,6 +147,13 @@
   .cat-head .cp{font-size:11.5px;color:var(--ink-soft);margin-left:5px}
   .cat-bar{height:11px;border-radius:999px;background:var(--line);overflow:hidden}
   .cat-bar i{display:block;height:100%;border-radius:999px;transition:width .6s ease}
+  #authScreen{position:fixed;inset:0;background:linear-gradient(135deg,#145e5e,#0f4a4a);display:flex;align-items:center;justify-content:center;z-index:90;padding:20px}
+  .auth-card{background:var(--surface);border-radius:22px;padding:30px 24px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+  .auth-logo{font-size:44px;text-align:center}
+  .auth-card h2{font-size:23px;font-weight:800;text-align:center;margin-top:6px;color:var(--ink)}
+  .auth-sub{text-align:center;color:var(--ink-soft);font-size:14px;margin:4px 0 22px}
+  .auth-err{background:var(--red-soft);color:#7d1d12;padding:10px 13px;border-radius:10px;font-size:13px;margin-bottom:12px}
+  .auth-tip{font-size:12px;color:var(--ink-soft);background:var(--teal-soft);padding:11px 13px;border-radius:10px;margin-top:16px;line-height:1.5}
   #loadingScreen{position:fixed;inset:0;background:linear-gradient(135deg,#145e5e,#0f4a4a);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;color:#fff;gap:14px}
   #loadingScreen h2{font-size:22px;font-weight:800}
   #loadingScreen p{font-size:14px;opacity:.8}
@@ -161,6 +168,21 @@
   <h2>Nosso Dinheiro</h2>
   <p>Carregando seus dados...</p>
 </div>
+
+<div id="authScreen" style="display:none">
+  <div class="auth-card">
+    <div class="auth-logo">💚</div>
+    <h2>Nosso Dinheiro</h2>
+    <p class="auth-sub" id="authSub">Entre para acessar suas finanças</p>
+    <div class="field"><label>E-mail</label><input id="authEmail" type="email" inputmode="email" placeholder="seu@email.com" autocomplete="username"></div>
+    <div class="field"><label>Senha</label><input id="authPass" type="password" placeholder="sua senha" autocomplete="current-password"></div>
+    <div id="authError" class="auth-err hidden"></div>
+    <button class="btn primary" id="authBtn" style="margin-top:4px">Entrar</button>
+    <button class="btn ghost" id="authToggle" style="margin-top:10px">Não tenho conta — criar agora</button>
+    <p class="auth-tip" id="authTip">💡 Para usar como casal, os dois entram com o <b>mesmo e-mail e senha</b> — assim compartilham os mesmos dados.</p>
+  </div>
+</div>
+
 
 <header>
   <div class="head-row">
@@ -288,6 +310,11 @@
     <div class="card">
       <div id="statusConexao" class="alert info"><span class="ai">🔄</span><span>Verificando conexão...</span></div>
     </div>
+    <h2 class="section">Conta</h2>
+    <div class="card">
+      <p class="muted" style="font-size:13px;margin-bottom:12px">Logado como: <b id="userEmail">—</b></p>
+      <button class="btn ghost" id="btnLogout" style="color:var(--red)">🚪 Sair da conta</button>
+    </div>
   </section>
 </main>
 
@@ -309,16 +336,47 @@
 /* ====== SUPABASE ====== */
 const SUPA_URL='https://xizwvtjzwjzqchmzhviy.supabase.co';
 const SUPA_KEY='sb_publishable_BlSmdtrprS02qt1PJs_z9g_nnLY5-k3';
+
+/* token do usuário logado (guardado no aparelho) */
+let authToken=null, authUser=null;
+function loadSession(){
+  try{ const s=JSON.parse(localStorage.getItem('nd_session')||'null'); if(s&&s.access_token){authToken=s.access_token;authUser=s.user;return true;} }catch(e){}
+  return false;
+}
+function saveSession(s){ try{localStorage.setItem('nd_session',JSON.stringify(s));}catch(e){} authToken=s.access_token;authUser=s.user; }
+function clearSession(){ try{localStorage.removeItem('nd_session');}catch(e){} authToken=null;authUser=null; }
+
+/* chamadas de autenticação */
+async function authSignup(email,password){
+  const res=await fetch(SUPA_URL+'/auth/v1/signup',{method:'POST',
+    headers:{'apikey':SUPA_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify({email,password})});
+  const data=await res.json();
+  if(!res.ok)throw new Error(data.msg||data.error_description||data.message||'Erro ao criar conta');
+  return data;
+}
+async function authLogin(email,password){
+  const res=await fetch(SUPA_URL+'/auth/v1/token?grant_type=password',{method:'POST',
+    headers:{'apikey':SUPA_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify({email,password})});
+  const data=await res.json();
+  if(!res.ok)throw new Error(data.msg||data.error_description||data.error||'E-mail ou senha incorretos');
+  return data;
+}
+
+/* API REST agora usa o token do usuário logado */
 const api=async(path,opts={})=>{
+  const token=authToken||SUPA_KEY;
   const res=await fetch(SUPA_URL+'/rest/v1/'+path,{
-    headers:{'apikey':SUPA_KEY,'Authorization':'Bearer '+SUPA_KEY,'Content-Type':'application/json','Prefer':opts.prefer||'return=representation',...opts.headers},
+    headers:{'apikey':SUPA_KEY,'Authorization':'Bearer '+token,'Content-Type':'application/json','Prefer':opts.prefer||'return=representation',...opts.headers},
     ...opts});
+  if(res.status===401){clearSession();showAuth();throw new Error('Sessão expirada. Faça login de novo.');}
   if(!res.ok){throw new Error(await res.text());}
   const t=await res.text(); return t?JSON.parse(t):[];
 };
 const DB_api={
-  getConfig:()=>api('config?id=eq.casal'),
-  saveConfig:(d)=>api('config?id=eq.casal',{method:'PATCH',body:JSON.stringify(d)}),
+  getConfig:()=>api('config?select=*'),
+  saveConfig:(d)=>api('config',{method:'POST',body:JSON.stringify({...d,user_id:authUser&&authUser.id}),prefer:'resolution=merge-duplicates,return=representation'}),
   getEntradas:()=>api('entradas?order=dia.asc'),
   addEntrada:(e)=>api('entradas',{method:'POST',body:JSON.stringify(e)}),
   updEntrada:(id,d)=>api('entradas?id=eq.'+id,{method:'PATCH',body:JSON.stringify(d)}),
@@ -411,7 +469,12 @@ async function loadAll(){
   const sc=document.getElementById('statusConexao');
   try{
     const[cfg,ent,desp,gas]=await Promise.all([DB_api.getConfig(),DB_api.getEntradas(),DB_api.getDespesas(),DB_api.getGastos()]);
-    if(cfg.length)DB.config=cfg[0];
+    if(cfg.length){DB.config=cfg[0];}
+    else{
+      // usuário novo: cria a config inicial dele
+      DB.config={name1:'Pessoa 1',name2:'Pessoa 2',dizimo:true,dizimo_pct:10,meta:0,reserva:0};
+      try{await DB_api.saveConfig(DB.config);}catch(e){}
+    }
     DB.entradas=ent;DB.despesas=desp;DB.gastos=gas;
     setSyncState('ok');
     if(sc){sc.innerHTML='<span class="ai">✅</span><span>Conectado. Dados salvos na nuvem e sincronizados.</span>';sc.className='alert green';}
@@ -836,14 +899,78 @@ function iniciarApp(){
   const b1=document.getElementById('btnSaveNames');if(b1)b1.onclick=saveConfig;
   const b2=document.getElementById('btnSaveConfig');if(b2)b2.onclick=saveConfig;
   const b3=document.getElementById('btnSaveReserva');if(b3)b3.onclick=saveConfig;
+  const bl=document.getElementById('btnLogout');if(bl)bl.onclick=fazerLogout;
 
-  (async()=>{
-    const ok=await loadAll();
-    const ls=document.getElementById('loadingScreen');if(ls)ls.style.display='none';
-    bindSettings();render();
-    if(!ok)setTimeout(()=>alert('⚠️ Não foi possível conectar ao banco. Veja Ajustes → Status da conexão.'),500);
-    setInterval(async()=>{try{await loadAll();render();}catch(e){}},30000);
-  })();
+  /* ligações da tela de login */
+  const ab=document.getElementById('authBtn');if(ab)ab.onclick=fazerAuth;
+  const at=document.getElementById('authToggle');if(at)at.onclick=toggleAuthMode;
+  const ap=document.getElementById('authPass');if(ap)ap.addEventListener('keydown',e=>{if(e.key==='Enter')fazerAuth();});
+
+  /* decide: tem sessão salva? entra direto. senão, mostra login */
+  const ls=document.getElementById('loadingScreen');
+  if(loadSession()){
+    iniciarSessao();
+  }else{
+    if(ls)ls.style.display='none';
+    showAuth();
+  }
+}
+
+let authMode='login';
+function showAuth(){
+  const a=document.getElementById('authScreen');if(a)a.style.display='flex';
+  const ls=document.getElementById('loadingScreen');if(ls)ls.style.display='none';
+}
+function hideAuth(){const a=document.getElementById('authScreen');if(a)a.style.display='none';}
+function toggleAuthMode(){
+  authMode=authMode==='login'?'signup':'login';
+  setTxt('authSub',authMode==='login'?'Entre para acessar suas finanças':'Crie sua conta para começar');
+  document.getElementById('authBtn').textContent=authMode==='login'?'Entrar':'Criar conta';
+  document.getElementById('authToggle').textContent=authMode==='login'?'Não tenho conta — criar agora':'Já tenho conta — entrar';
+}
+function showAuthError(msg){const e=document.getElementById('authError');if(e){e.textContent=msg;e.classList.remove('hidden');}}
+function hideAuthError(){const e=document.getElementById('authError');if(e)e.classList.add('hidden');}
+
+async function fazerAuth(){
+  const email=v('authEmail').trim(),pass=v('authPass');
+  hideAuthError();
+  if(!email||!pass){showAuthError('Preencha e-mail e senha.');return;}
+  if(pass.length<6){showAuthError('A senha precisa ter pelo menos 6 caracteres.');return;}
+  const btn=document.getElementById('authBtn');btn.textContent='Aguarde...';btn.disabled=true;
+  try{
+    if(authMode==='signup'){
+      const r=await authSignup(email,pass);
+      if(r.access_token){ saveSession({access_token:r.access_token,user:r.user}); iniciarSessao(); }
+      else { // precisa confirmar e-mail OU já entra direto dependendo da config
+        alert('Conta criada! Agora faça login com seu e-mail e senha.');
+        authMode='signup';toggleAuthMode();
+      }
+    }else{
+      const r=await authLogin(email,pass);
+      saveSession({access_token:r.access_token,user:r.user});
+      iniciarSessao();
+    }
+  }catch(e){ showAuthError(e.message); }
+  btn.disabled=false;btn.textContent=authMode==='login'?'Entrar':'Criar conta';
+}
+
+function fazerLogout(){
+  if(!confirm('Sair da conta? Seus dados continuam salvos na nuvem.'))return;
+  clearSession();
+  DB={config:{name1:'Pessoa 1',name2:'Pessoa 2',dizimo:true,dizimo_pct:10,meta:0,reserva:0},entradas:[],despesas:[],gastos:[]};
+  hideAuth();showAuth();
+  go('painel');
+}
+
+async function iniciarSessao(){
+  hideAuth();
+  const ls=document.getElementById('loadingScreen');if(ls)ls.style.display='flex';
+  const eml=document.getElementById('userEmail');if(eml&&authUser)eml.textContent=authUser.email;
+  const ok=await loadAll();
+  if(ls)ls.style.display='none';
+  bindSettings();render();
+  if(!ok)setTimeout(()=>alert('⚠️ Não foi possível carregar os dados. Veja Ajustes → Status da conexão.'),500);
+  if(!window._ndInterval)window._ndInterval=setInterval(async()=>{try{if(authToken){await loadAll();render();}}catch(e){}},30000);
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',iniciarApp);
 else iniciarApp();
