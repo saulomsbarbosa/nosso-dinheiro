@@ -266,6 +266,13 @@
     <div class="card" id="gastosList"></div>
   </section>
 
+  <section class="view" id="view-pj">
+    <h2 class="section">Resumo PJ do mês</h2>
+    <div class="card" id="pjResumo"></div>
+    <h2 class="section">Gastos da empresa</h2>
+    <div class="card" id="pjList"></div>
+  </section>
+
   <section class="view" id="view-calc">
     <h2 class="section">Calculadora financeira</h2>
     <div class="calc-tabs" id="calcTabs">
@@ -326,6 +333,7 @@
   <button data-v="entradas"><span class="ic">💰</span>Entradas</button>
   <button data-v="despesas"><span class="ic">📋</span>Despesas</button>
   <button data-v="contas"><span class="ic">📅</span>Contas</button>
+  <button data-v="pj"><span class="ic">💼</span>PJ</button>
   <button data-v="grafico"><span class="ic">📊</span>Gráfico</button>
   <button data-v="gastos"><span class="ic">🛒</span>Dia a dia</button>
   <button data-v="calc"><span class="ic">🧮</span>Calc</button>
@@ -388,6 +396,10 @@ const DB_api={
   getGastos:()=>api('gastos?order=data.desc'),
   addGasto:(g)=>api('gastos',{method:'POST',body:JSON.stringify(g)}),
   delGasto:(id)=>api('gastos?id=eq.'+id,{method:'DELETE',prefer:''}),
+  getGastosPJ:()=>api('gastos_pj?order=criado_em.desc'),
+  addGastoPJ:(g)=>api('gastos_pj',{method:'POST',body:JSON.stringify(g)}),
+  updGastoPJ:(id,d)=>api('gastos_pj?id=eq.'+id,{method:'PATCH',body:JSON.stringify(d)}),
+  delGastoPJ:(id)=>api('gastos_pj?id=eq.'+id,{method:'DELETE',prefer:''}),
 };
 
 /* ====== CATEGORIAS ====== */
@@ -418,7 +430,7 @@ function fpgOptions(sel){
 }
 
 /* ====== ESTADO ====== */
-let DB={config:{name1:'Pessoa 1',name2:'Pessoa 2',dizimo:true,dizimo_pct:10,meta:0,reserva:0},entradas:[],despesas:[],gastos:[]};
+let DB={config:{name1:'Pessoa 1',name2:'Pessoa 2',dizimo:true,dizimo_pct:10,meta:0,reserva:0},entradas:[],despesas:[],gastos:[],gastos_pj:[]};
 let viewMonth=new Date(); viewMonth.setDate(1);
 let calcMode='divisao';
 let contasSub='vencer';
@@ -443,6 +455,20 @@ function despesasDoMes(){
     return d.mes===mk;
   }).map(d=>d.modo==='parcelada'?{...d,_parcAtual:parcelaIndexNoMes(d,mk)}:d);
 }
+function gastosPJDoMes(){
+  const mk=curMK();
+  return DB.gastos_pj.filter(g=>g.mes===mk);
+}
+/* valor efetivo de um gasto PJ (combustível usa % de trabalho) */
+function valorPJ(g){
+  if(g.tipo==='combustivel'){return (+g.valor||0)*((+g.pct_trabalho||0)/100);}
+  return +g.valor||0;
+}
+/* parte pessoal do combustível (o resto que não é trabalho) vira despesa do mês */
+function combustivelPessoal(){
+  return gastosPJDoMes().filter(g=>g.tipo==='combustivel')
+    .reduce((s,g)=>s+(+g.valor||0)*(1-(+g.pct_trabalho||0)/100),0);
+}
 function totals(){
   const mk=curMK();
   const entMes=DB.entradas.filter(e=>e.recorrente||!e.mes||e.mes===mk);
@@ -452,14 +478,31 @@ function totals(){
   const desp=despesasDoMes();
   const totalFix=desp.filter(d=>d.tipo==='fixa').reduce((s,d)=>s+(+d.valor||0),0);
   const totalVar=desp.filter(d=>d.tipo==='variavel').reduce((s,d)=>s+(+d.valor||0),0);
-  const totalOut=totalFix+totalVar;
   const gastosMes=DB.gastos.filter(g=>g.data&&g.data.slice(0,7)===mk);
   const totalGasto=gastosMes.reduce((s,g)=>s+(+g.valor||0),0);
-  const pct=Number(DB.config.dizimo_pct)||10;
-  const dizimo=DB.config.dizimo?totalIn*(pct/100):0;
-  const saldo=totalIn-dizimo-totalOut-totalGasto;
+
+  /* ===== PJ ===== */
+  const gpj=gastosPJDoMes();
+  const totalGastosEmpresa=gpj.reduce((s,g)=>s+valorPJ(g),0); // já considera % do combustível
+  const impostosPJ=entMes.filter(e=>e.tipo_renda==='pj'&&!e.isento).reduce((s,e)=>s+(+e.imposto||0),0);
+  const recebPJ=entMes.filter(e=>e.tipo_renda==='pj').reduce((s,e)=>s+(+e.valor||0),0);
+  const recebCLT=entMes.filter(e=>e.tipo_renda!=='pj').reduce((s,e)=>s+(+e.valor||0),0);
+  const liquidoPJ=recebPJ-impostosPJ-totalGastosEmpresa;
+  const combPessoal=combustivelPessoal();
+
+  /* saídas totais: despesas + gastos dia + impostos PJ + gastos empresa + combustível pessoal */
+  const totalOut=totalFix+totalVar+impostosPJ+totalGastosEmpresa+combPessoal;
+
+  /* ===== DÍZIMO ===== CLT: 10% do bruto · PJ: 10% do líquido */
+  const pct=(Number(DB.config.dizimo_pct)||10)/100;
+  let dizimo=0;
+  if(DB.config.dizimo){
+    dizimo = recebCLT*pct + Math.max(0,liquidoPJ)*pct;
+  }
+  const saldo=totalIn-dizimo-totalFix-totalVar-totalGasto-impostosPJ-totalGastosEmpresa-combPessoal;
   const livre=totalIn-dizimo;
-  return{totalIn,in1,in2,totalFix,totalVar,totalOut,totalGasto,dizimo,saldo,livre,desp,entMes,gastosMes};
+  return{totalIn,in1,in2,totalFix,totalVar,totalOut,totalGasto,dizimo,saldo,livre,desp,entMes,gastosMes,
+    gpj,totalGastosEmpresa,impostosPJ,recebPJ,recebCLT,liquidoPJ,combPessoal,temPJ:recebPJ>0||gpj.length>0};
 }
 
 /* ====== SYNC ====== */
@@ -468,14 +511,14 @@ async function loadAll(){
   setSyncState('syncing');
   const sc=document.getElementById('statusConexao');
   try{
-    const[cfg,ent,desp,gas]=await Promise.all([DB_api.getConfig(),DB_api.getEntradas(),DB_api.getDespesas(),DB_api.getGastos()]);
+    const[cfg,ent,desp,gas,gpj]=await Promise.all([DB_api.getConfig(),DB_api.getEntradas(),DB_api.getDespesas(),DB_api.getGastos(),DB_api.getGastosPJ()]);
     if(cfg.length){DB.config=cfg[0];}
     else{
       // usuário novo: cria a config inicial dele
       DB.config={name1:'Pessoa 1',name2:'Pessoa 2',dizimo:true,dizimo_pct:10,meta:0,reserva:0};
       try{await DB_api.saveConfig(DB.config);}catch(e){}
     }
-    DB.entradas=ent;DB.despesas=desp;DB.gastos=gas;
+    DB.entradas=ent;DB.despesas=desp;DB.gastos=gas;DB.gastos_pj=gpj||[];
     setSyncState('ok');
     if(sc){sc.innerHTML='<span class="ai">✅</span><span>Conectado. Dados salvos na nuvem e sincronizados.</span>';sc.className='alert green';}
     return true;
@@ -499,7 +542,7 @@ function render(){
   setTxt('p1name',DB.config.name1);setTxt('p2name',DB.config.name2);
   setTxt('p1val',BRLk(t.in1));setTxt('p2val',BRLk(t.in2));
   renderHealth(t);renderAlerts(t);renderAPagar(t);
-  renderEntradas(t);renderDespesas(t);renderContas(t);renderGrafico(t);renderGastos(t);
+  renderEntradas(t);renderDespesas(t);renderContas(t);renderGrafico(t);renderGastos(t);renderPJ(t);
   refreshSelects();
 }
 const setTxt=(id,txt)=>{const e=document.getElementById(id);if(e)e.textContent=txt;};
@@ -559,17 +602,21 @@ function renderEntradas(t){
   const box=document.getElementById('entradasList');if(!box)return;
   const list=t.entMes.slice().sort((a,b)=>(a.dia||1)-(b.dia||1));
   if(!list.length){box.innerHTML=empty('💰','Nenhuma entrada. Toque em + para adicionar.');return;}
-  let html=list.map(e=>`<div class="item">
+  let html=list.map(e=>{
+    const rendaTag=e.tipo_renda==='pj'?'<span class="pill parc">PJ</span>':'<span class="pill rec">CLT</span>';
+    const impInfo=e.tipo_renda==='pj'?(e.isento?' · isento':(e.imposto?` · imposto ${BRL(e.imposto)}`:'')):'';
+    return `<div class="item">
     <span class="tag t-in">${e.pessoa==='p1'?'🟢':e.pessoa==='p2'?'🟠':'💵'}</span>
-    <div class="body"><div class="t">${esc(e.descricao)} ${e.recorrente?'<span class="pill rec">todo mês</span>':''}</div>
-    <div class="s"><span class="dot ${e.pessoa}"></span> ${nameOf(e.pessoa)} · dia ${e.dia||'?'}</div></div>
+    <div class="body"><div class="t">${esc(e.descricao)} ${rendaTag}${e.recorrente?'<span class="pill rec">todo mês</span>':''}</div>
+    <div class="s"><span class="dot ${e.pessoa}"></span> ${nameOf(e.pessoa)} · dia ${e.dia||'?'}${impInfo}</div></div>
     <div class="amt in num">+${BRL(e.valor)}</div>
     <div class="acts">
       <button class="iconbtn" onclick="editarEntrada('${e.id}')" title="editar">✏️</button>
       <button class="iconbtn danger" onclick="doDelEntrada('${e.id}')" title="apagar">🗑️</button>
     </div>
-  </div>`).join('');
+  </div>`;}).join('');
   html+=`<div class="summary-line total"><span>Total que entra</span><span class="pos num">${BRL(t.totalIn)}</span></div>`;
+  if(t.impostosPJ>0)html+=`<div class="summary-line"><span>Impostos PJ</span><span class="neg num">−${BRL(t.impostosPJ)}</span></div>`;
   if(DB.config.dizimo)html+=`<div class="summary-line"><span>Dízimo (${DB.config.dizimo_pct}%)</span><span class="neg num">−${BRL(t.dizimo)}</span></div><div class="summary-line total"><span>Disponível após dízimo</span><span class="num">${BRL(t.livre)}</span></div>`;
   box.innerHTML=html;
 }
@@ -659,6 +706,7 @@ function openAddMenu(){
   const cur=currentView();
   if(cur==='entradas')return formEntrada();
   if(cur==='despesas'||cur==='contas')return formDespesa();
+  if(cur==='pj')return formGastoPJ();
   if(cur==='gastos'){const g=document.getElementById('gQuick');if(g)g.focus();return;}
   getMC().innerHTML=`
     <h3>O que adicionar? <button class="x" onclick="closeModal()">✕</button></h3>
@@ -676,35 +724,60 @@ function peopleOptions(sel){
 /* ENTRADA: adicionar e editar */
 function formEntrada(ed){
   const e=ed||{};
+  const tipoRenda=e.tipo_renda||'clt';
   getMC().innerHTML=`
     <h3>${ed?'Editar':'Nova'} entrada <button class="x" onclick="closeModal()">✕</button></h3>
+    <div class="seg" style="margin-bottom:12px">
+      <label><input type="radio" name="f_renda" value="clt" ${tipoRenda==='clt'?'checked':''} onchange="togglePJfields()"><span>👔 CLT</span></label>
+      <label><input type="radio" name="f_renda" value="pj" ${tipoRenda==='pj'?'checked':''} onchange="togglePJfields()"><span>💼 PJ</span></label>
+    </div>
     <div class="field"><label>De quem é?</label><select id="f_pessoa">${peopleOptions(e.pessoa||'p1')}</select></div>
-    <div class="field"><label>Descrição</label><input id="f_desc" placeholder="Ex: Salário, freela..." value="${esc(e.descricao||'')}"></div>
+    <div class="field"><label>Descrição</label><input id="f_desc" placeholder="Ex: Salário, nota fiscal..." value="${esc(e.descricao||'')}"></div>
     <div class="grid2">
       <div class="field"><label>Valor (R$)</label><input id="f_val" type="number" inputmode="decimal" placeholder="0,00" value="${e.valor||''}"></div>
       <div class="field"><label>Cai no dia</label><input id="f_dia" type="number" min="1" max="31" placeholder="5" value="${e.dia||''}"></div>
     </div>
+    <div id="pjFields" class="${tipoRenda==='pj'?'':'hidden'}">
+      <div class="toggle" style="border:none;padding:4px 0">
+        <div><div class="tl">Isento de impostos?</div><div class="ts">Marque se não paga imposto sobre este recebimento</div></div>
+        <label class="switch"><input type="checkbox" id="f_isento" ${e.isento?'checked':''} onchange="toggleIsento()"><span></span></label>
+      </div>
+      <div class="field" id="impostoField"><label>Imposto pago sobre este recebimento (R$)</label><input id="f_imposto" type="number" inputmode="decimal" placeholder="Ex: 800" value="${e.imposto||''}"></div>
+    </div>
     <div class="toggle" style="border:none;padding:4px 0">
-      <div><div class="tl">Repete todo mês?</div><div class="ts">Marque para salário fixo</div></div>
+      <div><div class="tl">Repete todo mês?</div><div class="ts">Marque para renda fixa</div></div>
       <label class="switch"><input type="checkbox" id="f_rec" ${(ed?e.recorrente:true)?'checked':''}><span></span></label>
     </div>
     <button class="btn primary" style="margin-top:10px" onclick="saveEntrada('${ed?e.id:''}')">${ed?'Salvar alterações':'Salvar entrada'}</button>`;
   openModal();
+  toggleIsento();
+}
+function togglePJfields(){
+  const pj=document.querySelector('[name=f_renda]:checked').value==='pj';
+  const f=document.getElementById('pjFields');if(f)f.classList.toggle('hidden',!pj);
+}
+function toggleIsento(){
+  const is=document.getElementById('f_isento');
+  const imp=document.getElementById('impostoField');
+  if(is&&imp)imp.classList.toggle('hidden',is.checked);
 }
 function editarEntrada(id){const e=DB.entradas.find(x=>x.id===id);if(e)formEntrada(e);}
 async function saveEntrada(id){
   const descricao=v('f_desc').trim(),valor=parseFloat(v('f_val')),dia=parseInt(v('f_dia'))||1;
   const pessoa=v('f_pessoa'),recorrente=document.getElementById('f_rec').checked;
+  const tipo_renda=document.querySelector('[name=f_renda]:checked').value;
+  const isento=tipo_renda==='pj'&&document.getElementById('f_isento').checked;
+  const imposto=(tipo_renda==='pj'&&!isento)?(parseFloat(v('f_imposto'))||0):0;
   if(!descricao||!valor){alert('Preencha descrição e valor.');return;}
   setSyncState('syncing');
   try{
+    const d={pessoa,descricao,valor,dia,recorrente,mes:recorrente?null:curMK(),tipo_renda,imposto,isento};
     if(id){
-      const d={pessoa,descricao,valor,dia,recorrente,mes:recorrente?null:curMK()};
       await DB_api.updEntrada(id,d);
       const e=DB.entradas.find(x=>x.id===id);Object.assign(e,d);
     }else{
-      const e={id:uid(),pessoa,descricao,valor,dia,recorrente,mes:recorrente?null:curMK()};
-      await DB_api.addEntrada(e);DB.entradas.push(e);
+      d.id=uid();
+      await DB_api.addEntrada(d);DB.entradas.push(d);
     }
     setSyncState('ok');
   }catch(e){setSyncState('error');alert('Erro ao salvar: '+e.message);}
@@ -788,6 +861,92 @@ async function confirmarPago(id){
   try{await DB_api.updDespesa(id,{pago:true,forma_pgto});const d=DB.despesas.find(x=>x.id===id);d.pago=true;d.forma_pgto=forma_pgto;setSyncState('ok');}
   catch(e){setSyncState('error');alert('Erro: '+e.message);}
   closeModal();render();
+}
+
+/* ====== ABA PJ ====== */
+const TIPOS_PJ=[
+  {id:'ferramentas',nome:'Ferramentas / Software',ic:'🛠️'},
+  {id:'contador',nome:'Contador',ic:'🧮'},
+  {id:'combustivel',nome:'Combustível',ic:'⛽'},
+  {id:'outro',nome:'Outro',ic:'📦'},
+];
+const tipoPJById=id=>TIPOS_PJ.find(t=>t.id===id)||TIPOS_PJ[TIPOS_PJ.length-1];
+function tiposPJOptions(sel){return TIPOS_PJ.map(t=>`<option value="${t.id}" ${sel===t.id?'selected':''}>${t.ic} ${t.nome}</option>`).join('');}
+
+function renderPJ(t){
+  const resumo=document.getElementById('pjResumo');
+  const lista=document.getElementById('pjList');
+  if(!resumo||!lista)return;
+  if(!t.temPJ){
+    resumo.innerHTML=empty('💼','Nenhuma renda PJ cadastrada este mês. Adicione uma entrada marcada como PJ para usar esta aba.');
+    lista.innerHTML='';
+    return;
+  }
+  resumo.innerHTML=`
+    <div class="summary-line"><span>Recebido como PJ</span><span class="pos num">${BRL(t.recebPJ)}</span></div>
+    <div class="summary-line"><span>− Impostos</span><span class="neg num">${BRL(t.impostosPJ)}</span></div>
+    <div class="summary-line"><span>− Gastos da empresa</span><span class="neg num">${BRL(t.totalGastosEmpresa)}</span></div>
+    <div class="summary-line total"><span>= Líquido PJ</span><span class="num">${BRL(t.liquidoPJ)}</span></div>
+    <div class="summary-line"><span>Dízimo sobre o líquido PJ (${DB.config.dizimo_pct}%)</span><span class="num">${BRL(Math.max(0,t.liquidoPJ)*(DB.config.dizimo_pct/100))}</span></div>`;
+  const gpj=t.gpj.slice();
+  if(!gpj.length){lista.innerHTML=empty('🛠️','Nenhum gasto da empresa este mês. Toque em + para adicionar (ferramentas, contador, combustível).');return;}
+  let html=gpj.map(g=>{
+    const tp=tipoPJById(g.tipo);
+    const combInfo=g.tipo==='combustivel'?`<span class="pill parc">${g.pct_trabalho||0}% trabalho</span>`:'';
+    const efetivo=valorPJ(g);
+    const sub=g.tipo==='combustivel'?`deduz ${BRL(efetivo)} de ${BRL(g.valor)}`:'';
+    return `<div class="item">
+      <span class="tag t-fixa">${tp.ic}</span>
+      <div class="body"><div class="t">${esc(g.descricao)} ${combInfo}</div>
+      <div class="s">${tp.nome}${sub?' · '+sub:''}</div></div>
+      <div class="amt out num">${BRL(efetivo)}</div>
+      <div class="acts">
+        <button class="iconbtn" onclick="editarGastoPJ('${g.id}')" title="editar">✏️</button>
+        <button class="iconbtn danger" onclick="doDelGastoPJ('${g.id}')" title="apagar">🗑️</button>
+      </div>
+    </div>`;}).join('');
+  html+=`<div class="summary-line total"><span>Total deduzido da empresa</span><span class="neg num">${BRL(t.totalGastosEmpresa)}</span></div>`;
+  if(t.combPessoal>0)html+=`<div class="summary-line"><span>Parte pessoal do combustível</span><span class="num">${BRL(t.combPessoal)}</span></div>`;
+  lista.innerHTML=html;
+}
+
+function formGastoPJ(ed){
+  const g=ed||{};
+  const tipo=g.tipo||'ferramentas';
+  getMC().innerHTML=`
+    <h3>${ed?'Editar':'Novo'} gasto da empresa <button class="x" onclick="closeModal()">✕</button></h3>
+    <div class="field"><label>Tipo</label><select id="f_tpj" onchange="toggleCombust()">${tiposPJOptions(tipo)}</select></div>
+    <div class="field"><label>Descrição</label><input id="f_desc" placeholder="Ex: Adobe, honorário contador..." value="${esc(g.descricao||'')}"></div>
+    <div class="field"><label>Valor total (R$)</label><input id="f_val" type="number" inputmode="decimal" placeholder="0,00" value="${g.valor||''}"></div>
+    <div class="field ${tipo==='combustivel'?'':'hidden'}" id="combField">
+      <label>Quanto % do combustível é para trabalho?</label>
+      <input id="f_pct" type="number" min="0" max="100" placeholder="Ex: 50" value="${g.pct_trabalho!=null?g.pct_trabalho:''}">
+      <p class="muted" style="font-size:11.5px;margin-top:5px">Só a parte de trabalho deduz do líquido PJ. O resto vira despesa pessoal.</p>
+    </div>
+    <button class="btn primary" onclick="saveGastoPJ('${ed?g.id:''}')">${ed?'Salvar alterações':'Salvar gasto'}</button>`;
+  openModal();
+}
+function toggleCombust(){const c=document.getElementById('combField');if(c)c.classList.toggle('hidden',v('f_tpj')!=='combustivel');}
+function editarGastoPJ(id){const g=DB.gastos_pj.find(x=>x.id===id);if(g)formGastoPJ(g);}
+async function saveGastoPJ(id){
+  const tipo=v('f_tpj'),descricao=v('f_desc').trim(),valor=parseFloat(v('f_val'));
+  const pct_trabalho=tipo==='combustivel'?(parseFloat(v('f_pct'))||0):100;
+  if(!descricao||!valor){alert('Preencha descrição e valor.');return;}
+  setSyncState('syncing');
+  try{
+    const d={descricao,valor,tipo,pct_trabalho,mes:curMK()};
+    if(id){await DB_api.updGastoPJ(id,d);const g=DB.gastos_pj.find(x=>x.id===id);Object.assign(g,d);}
+    else{d.id=uid();await DB_api.addGastoPJ(d);DB.gastos_pj.unshift(d);}
+    setSyncState('ok');
+  }catch(e){setSyncState('error');alert('Erro: '+e.message);}
+  closeModal();render();
+}
+async function doDelGastoPJ(id){
+  if(!confirm('Apagar este gasto da empresa?'))return;
+  setSyncState('syncing');
+  try{await DB_api.delGastoPJ(id);DB.gastos_pj=DB.gastos_pj.filter(x=>x.id!==id);setSyncState('ok');}
+  catch(e){setSyncState('error');alert('Erro: '+e.message);}
+  render();
 }
 
 /* ====== CALCULADORA ====== */
